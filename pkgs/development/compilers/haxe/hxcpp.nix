@@ -1,52 +1,64 @@
-{ stdenv, fetchzip, haxe, neko, pcre, sqlite, zlib }:
+{ stdenv, fetchzip, pkgs, haxe, neko, xcodeBaseDir ? "/Applications/Xcode.app" }:
 
 stdenv.mkDerivation rec {
-  name = "hxcpp-3.2.27";
+  name = "hxcpp-3.4.64";
 
   src = let
     zipFile = stdenv.lib.replaceChars ["."] [","] name;
   in fetchzip {
     inherit name;
-    url = "http://lib.haxe.org/files/3.0/${zipFile}.zip";
-    sha256 = "1hw4kr1f8q7f4fkzis7kvkm7h1cxhv6cf5v1iq7rvxs2fxiys7fr";
+    url = "https://lib.haxe.org/files/3.0/${zipFile}.zip";
+    sha256 = "02anhqpnakgmr30ddi5m862pj2158wcva75qbqcv308ir4gdwfa8";
   };
-
-  NIX_LDFLAGS = "-lpcre -lz -lsqlite3";
 
   outputs = [ "out" "lib" ];
 
   patchPhase = ''
-    rm -rf bin lib project/thirdparty project/libs/sqlite/sqlite3.[ch]
-    find . -name '*.n' -delete
-    sed -i -re '/(PCRE|ZLIB)_DIR|\<sqlite3\.c\>/d' project/Build.xml
+    rm -rf bin
     sed -i -e 's/mFromFile = "@";/mFromFile = "";/' tools/hxcpp/Linker.hx
-    sed -i -e '/dll_ext/s,HX_CSTRING("./"),HX_CSTRING("'"$lib"'/"),' \
-      src/hx/Lib.cpp
+    sed -i -e 's|sgLibPath.push_back("");|&sgLibPath.push_back("'"$lib"'/");|' src/hx/Lib.cpp
   '';
 
-  buildInputs = [ haxe neko pcre sqlite zlib ];
+  buildInputs = [ haxe neko ];
 
-  targetArch = "linux-m${if stdenv.is64bit then "64" else "32"}";
+  targetOs = if stdenv.isLinux then
+    "linux"
+  else if stdenv.isDarwin then
+    "mac"
+  else
+    "default";
+
+  targetArch = "${targetOs}-m${if stdenv.is64bit then "64" else "32"}";
 
   buildPhase = ''
-    haxe -neko project/build.n -cp tools/build -main Build
-    haxe -neko run.n -cp tools/run -main RunMain
-    haxe -neko hxcpp.n -cp tools/hxcpp -main BuildTool
-    (cd project && neko build.n "ndll-$targetArch")
+    mkdir .haxelib
+    export HAXELIB_PATH=`pwd`/.haxelib
+    haxelib dev hxcpp `pwd`
+    pushd tools/run
+      haxe compile.hxml
+    popd
+    pushd tools/hxcpp
+      haxe compile.hxml
+    popd
+    pushd project
+      neko build.n "ndll-$targetArch" "-DDEVELOPER_DIR=${xcodeBaseDir}/Contents/Developer"
+      haxe compile-cppia.hxml -D "DEVELOPER_DIR=${xcodeBaseDir}/Contents/Developer"
+    popd
   '';
 
   installPhase = ''
-    for i in bin/Linux*/*.dso; do
+    for i in bin/*/*; do
+      echo "$i"
       install -vD "$i" "$lib/$(basename "$i")"
     done
     find *.n toolchain/*.xml build-tool/BuildCommon.xml src include \
       -type f -exec install -vD -m 0644 {} "$out/lib/haxe/hxcpp/{}" \;
   '';
 
-  meta = {
-    homepage = "http://lib.haxe.org/p/hxcpp";
+  meta = with stdenv.lib; {
+    homepage = "https://lib.haxe.org/p/hxcpp";
     description = "Runtime support library for the Haxe C++ backend";
     license = stdenv.lib.licenses.bsd2;
-    platforms = stdenv.lib.platforms.linux;
+    platforms = platforms.linux ++ platforms.darwin;
   };
 }
